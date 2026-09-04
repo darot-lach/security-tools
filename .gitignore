@@ -1,0 +1,8 @@
+.env
+dependency-check-data/
+.trivy-cache/
+.grype-cache/
+output/
+backups/
+zap-auth/
+wordlists/

@@ -1,0 +1,389 @@
+name: security-tools
+
+# Pinned tool versions (checked against Docker Hub 2026-09-03). Never bump these to
+# `:latest` casually -- a version change can alter findings, and if the
+# Dependency-Check data volume is ever shared with another machine/environment, both
+# sides must use the exact same tag (the NVD data is stored in an embedded H2 database
+# whose schema is tied to the tool version that built it).
+#
+# Usage examples (see README.md for the full guide):
+#   TARGET_REPO=../projects/backend-service TARGET_NAME=backend-service \
+#     docker compose run --rm semgrep
+#   TARGET_HOST=target-host.example.com docker compose run --rm zap
+
+x-env: &common-env
+  TARGET_REPO: ${TARGET_REPO:-../projects/backend-service}
+  TARGET_NAME: ${TARGET_NAME:-backend-service}
+  TARGET_HOST: ${TARGET_HOST:-target-host.example.com}
+
+services:
+  semgrep:
+    image: returntocorp/semgrep:1.175.0
+    volumes:
+      - ${TARGET_REPO:-../projects/backend-service}:/src
+      - ./output/sast/${TARGET_NAME:-backend-service}:/out
+    working_dir: /src
+    entrypoint: semgrep
+    command:
+      - scan
+      - --config=p/security-audit
+      - --config=p/owasp-top-ten
+      - --config=p/java
+      - --config=p/docker
+      - --exclude=node_modules
+      - --exclude=vendor
+      - --exclude=coverage
+      - --exclude=target
+      - --json
+      - --output=/out/semgrep-report.json
+      - /src
+
+  trivy-fs:
+    image: aquasec/trivy:0.74.0
+    volumes:
+      - ${TARGET_REPO:-../projects/backend-service}:/repo
+      - ./.trivy-cache:/root/.cache
+      - ./output/sca/${TARGET_NAME:-backend-service}:/out
+    command:
+      - fs
+      - --timeout=20m
+      - --offline-scan   # required for Java repos: avoids live Maven Central lookups
+                         # that get 429 rate-limited (30 min IP block observed)
+      - --scanners=vuln,misconfig,secret
+      - --severity=HIGH,CRITICAL
+      - --ignore-unfixed
+      - --skip-dirs=node_modules,target,coverage,.git,.claude,.idea,dependency-check-data,zap,backup,grafana-data,prometheus-data,logs,jvm-monitoring-stack,keys,file-storage
+      - --skip-files=stagging.sql
+      - --format=json
+      - --output=/out/trivy-fs-report.json
+      - /repo
+
+  trivy-config:
+    image: aquasec/trivy:0.74.0
+    volumes:
+      - ${TARGET_REPO:-../projects/backend-service}:/repo
+      - ./.trivy-cache:/root/.cache
+      - ./output/sca/${TARGET_NAME:-backend-service}:/out
+    command:
+      - config
+      - --timeout=20m
+      - --severity=HIGH,CRITICAL,MEDIUM,LOW
+      - --skip-dirs=node_modules,target,coverage,.git,.claude,.idea,dependency-check-data,zap,backup,grafana-data,prometheus-data,logs,jvm-monitoring-stack,keys,file-storage
+      - --format=json
+      - --output=/out/trivy-config-report.json
+      - /repo
+
+  gitleaks:
+    # Full git-history secret scan (all branches/commits), not just the working tree --
+    # a secret removed in a later commit is still exposed in history. Trivy's
+    # `--scanners secret` (used in trivy-fs above) only sees the current tree.
+    image: zricethezav/gitleaks:v8.18.4
+    volumes:
+      - ${TARGET_REPO:-../projects/backend-service}:/repo
+      - ./output/secret/${TARGET_NAME:-backend-service}:/out
+    working_dir: /repo
+    command:
+      - detect
+      - --source=/repo
+      - --log-opts=--all
+      - --report-format=sarif
+      - --report-path=/out/gitleaks-report.sarif
+      - --redact
+
+  trufflehog:
+    # Detection + LIVE verification: does a minimal read-only auth check against the
+    # secret's own provider to tell you whether a found credential is still valid right
+    # now, not just whether it matches a pattern.
+    image: trufflesecurity/trufflehog:3.90.8
+    volumes:
+      - ${TARGET_REPO:-../projects/backend-service}:/repo
+      - ./output/secret/${TARGET_NAME:-backend-service}:/out
+    entrypoint: ["sh", "-c"]
+    command:
+      - "trufflehog git file:///repo --json --only-verified > /out/trufflehog-verified.jsonl"
+
+  syft:
+    # SBOM generation (CycloneDX + SPDX) from source -- feeds grype below and is useful
+    # standalone for supply-chain/license inventory.
+    image: anchore/syft:v1.20.0
+    volumes:
+      - ${TARGET_REPO:-../projects/backend-service}:/src:ro
+      - ./output/sbom/${TARGET_NAME:-backend-service}:/out
+    command:
+      - /src
+      - -o
+      - cyclonedx-json=/out/sbom.cdx.json
+      - -o
+      - spdx-json=/out/sbom.spdx.json
+
+  cdxgen:
+    # Supplementary SBOM generator, run ALONGSIDE syft (not instead of it) -- syft
+    # above stays the primary SBOM/grype input. cdxgen adds a deeper Java/Maven
+    # dependency-tree pass via the cyclonedx-maven-plugin that syft doesn't do.
+    #
+    # The 2026-07-06 assessment's cdxgen run failed on this machine with
+    # `'C:\Program' is not recognized as an internal or external command` -- it was
+    # invoked as a native Windows npm CLI that shelled out to an unquoted
+    # `C:\Program Files\Maven\...\mvn.exe` path. The fix isn't "quote the path", it's
+    # "never touch a host Maven at all": this image bundles its own JDK + Maven, so
+    # the whole build happens inside Linux and the bug can't occur here.
+    #
+    # java17, not java11: the original assessment's error log suggested a JDK11 image
+    # for general cyclonedx-maven-plugin compatibility, but backend-service (the
+    # only Maven/Java target here) targets <java.version>17</java.version> in its
+    # pom.xml -- a JDK11-bundled image can't compile Java 17 source, so this would
+    # fail the Maven reachability pass. Match this to whatever JDK version your actual
+    # TARGET_REPO builds with if that ever changes.
+    #
+    # Confirmed pullable (docker pull) 2026-09-04. cdxgen's container registry has
+    # migrated from ghcr.io/cyclonedx/* to ghcr.io/cdxgen/* with 40+ Java-variant
+    # images named cdxgen-<distro>-<lang><ver> -- re-check
+    # https://github.com/cdxgen/cdxgen/pkgs/container/cdxgen-java17 if this tag ever
+    # 404s (e.g. after upgrading past v13, or if the target service's Java version
+    # changes from 17).
+    image: ghcr.io/cdxgen/cdxgen-java17:v13
+    environment:
+      # Optional: have cdxgen query Maven Central/npm/NuGet for license metadata.
+      # Off by default (slow). If enabled, also set GITHUB_TOKEN or GitHub API
+      # rate-limiting will silently truncate license/repo lookups partway through.
+      FETCH_LICENSE: ${FETCH_LICENSE:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    volumes:
+      - ${TARGET_REPO:-../projects/backend-service}:/app
+      - ./output/sbom/${TARGET_NAME:-backend-service}:/out
+    working_dir: /app
+    command:
+      - -o
+      - /out/cdxgen-sbom.cdx.json
+      - --project-name
+      - ${TARGET_NAME:-backend-service}
+      - -r
+      - /app
+    # NOTE: like dependency-check above, cdxgen's Java analysis is far more complete
+    # against a built target/*.jar. Run `mvn package` in TARGET_REPO for Java targets
+    # and `npm install` for JS/TS targets first -- see README.md "Pre-scan steps".
+
+  grype-db-update:
+    # Grype's bundled DB goes stale fast (rejects anything > 5 days old) and does not
+    # auto-update on scan -- run this first (and on a schedule), same pattern as
+    # dependency-check-update.
+    image: anchore/grype:v0.118.0
+    volumes:
+      - ./.grype-cache:/.cache/grype
+    command:
+      - db
+      - update
+
+  grype:
+    # Corroborating CVE scan against the syft-generated SBOM -- run `syft` first, and
+    # `grype-db-update` at least once (and periodically thereafter).
+    # Note: this image has no shell, so use --file (native flag) instead of `sh -c`
+    # redirection -- unlike trufflehog's image, which does have a shell.
+    image: anchore/grype:v0.118.0
+    volumes:
+      - ./.grype-cache:/.cache/grype
+      - ./output/sbom/${TARGET_NAME:-backend-service}:/sbom:ro
+      - ./output/sca/${TARGET_NAME:-backend-service}:/out
+    command:
+      - sbom:/sbom/sbom.cdx.json
+      - -o
+      - json
+      - --file
+      - /out/grype-report.json
+
+  dependency-check:
+    image: owasp/dependency-check:13.0.0
+    environment:
+      <<: *common-env
+    env_file:
+      - .env
+    volumes:
+      - ${TARGET_REPO:-../projects/backend-service}:/src
+      - ./output/sca/${TARGET_NAME:-backend-service}:/report
+      - ./dependency-check-data:/usr/share/dependency-check/data
+    command:
+      - --scan=/src
+      - --format=JSON
+      - --project=${TARGET_NAME:-backend-service}
+      - --out=/report
+      - --exclude=**/node_modules/**
+      - --exclude=**/coverage/**
+      - --exclude=**/file-storage/**
+      - --exclude=**/backup/**
+      - --exclude=**/grafana-data/**
+      - --exclude=**/prometheus-data/**
+      - --exclude=**/logs/**
+      - --exclude=**/jvm-monitoring-stack/**
+      - --exclude=**/keys/**
+      - --exclude=**/zap/**
+      - --exclude=**/.git/**
+      - --exclude=**/.idea/**
+      - --exclude=**/.claude/**
+      - --nvdApiKey=${NVD_API_KEY}
+      # NOTE: target/ is intentionally NOT excluded -- it holds the built Spring Boot
+      # fat jar (BOOT-INF/lib/*.jar), which is what Dependency-Check's Jar Analyzer
+      # needs to hash to actually identify the resolved dependency tree. Excluding it
+      # (an earlier mistake) caused only 34 "dependencies" to be found instead of the
+      # real ~200+, including a false positive from an unrelated archive under
+      # file-storage/.
+
+  dependency-check-update:
+    # Refreshes the shared NVD database only -- no scanning. Run this on its own
+    # schedule (e.g. a nightly Windows Scheduled Task) so scan runs above can pass
+    # --noupdate and start instantly. See README.md "Keeping the database warm".
+    image: owasp/dependency-check:13.0.0
+    env_file:
+      - .env
+    volumes:
+      - ./dependency-check-data:/usr/share/dependency-check/data
+    command:
+      - --updateonly
+      - --nvdApiKey=${NVD_API_KEY}
+
+  zap:
+    image: zaproxy/zap-stable:2.17.0
+    volumes:
+      - ./output/dast/${TARGET_HOST:-target-host.example.com}:/zap/wrk:rw
+    entrypoint: zap-full-scan.py
+    command:
+      - -t
+      - https://${TARGET_HOST:-target-host.example.com}
+      - -J
+      - zap_${TARGET_HOST:-target-host.example.com}.json
+      - -I
+
+  nuclei:
+    image: projectdiscovery/nuclei:v3.11.1
+    volumes:
+      - ./output/dast/${TARGET_HOST:-target-host.example.com}:/out
+    command:
+      - -u
+      - https://${TARGET_HOST:-target-host.example.com}
+      - -silent
+      - -jsonl
+      - -o
+      - /out/nuclei-findings.jsonl
+      - -severity
+      - medium,high,critical
+      - -tags
+      - cve,exposure,misconfiguration,default-login,panel,ssl,tech
+
+  testssl:
+    image: drwetter/testssl.sh:3.2   # upstream only publishes minor-version tags
+    volumes:
+      - ./output/dast/${TARGET_HOST:-target-host.example.com}:/data
+    command:
+      - --jsonfile
+      - /data/testssl_${TARGET_HOST:-target-host.example.com}.json
+      - --severity
+      - LOW
+      - ${TARGET_HOST:-target-host.example.com}
+
+  # --- DAST recon/discovery chain -------------------------------------------------
+  # The 2026-07-06 assessment ran these BEFORE zap/nuclei (stages: recon -> discovery
+  # -> zap -> nuclei -> verify). They're standalone/additive here, same as every other
+  # service in this file -- none of them auto-chain into zap/nuclei; read their output
+  # files yourself if you want to feed one tool's results into another.
+
+  httpx:
+    # Recon stage: live-host probe + tech fingerprint.
+    image: projectdiscovery/httpx:v1.10.0
+    volumes:
+      - ./output/dast/${TARGET_HOST:-target-host.example.com}:/out
+    command:
+      - -u
+      - https://${TARGET_HOST:-target-host.example.com}
+      - -silent
+      - -json
+      - -status-code
+      - -title
+      - -tech-detect
+      - -web-server
+      - -timeout
+      - "30"
+      - -o
+      - /out/httpx-live.jsonl
+
+  katana:
+    # Discovery stage: crawler. -jc also parses JS files for endpoints -- this is
+    # what originally fed js.txt/api.txt/params.txt downstream.
+    image: projectdiscovery/katana:v1.5.0
+    volumes:
+      - ./output/dast/${TARGET_HOST:-target-host.example.com}:/out
+    command:
+      - -u
+      - https://${TARGET_HOST:-target-host.example.com}
+      - -silent
+      - -jc
+      - -d
+      - "5"
+      - -c
+      - "3"
+      - -o
+      - /out/katana-urls.txt
+
+  gau:
+    # Discovery stage: historical/archived URL discovery (AlienVault OTX, Wayback
+    # Machine, Common Crawl). No source-repo mount -- queries external archive
+    # services for TARGET_HOST directly, same as waybackurls below.
+    #
+    # lc/gau has no actively-maintained Docker Hub image under the author's own
+    # namespace (only unrelated third-party accounts) -- built locally instead, on
+    # the same "exact pinned artifact" footing as every prebuilt image above. See
+    # docker/recon-tools.Dockerfile.
+    build:
+      context: ./docker
+      dockerfile: recon-tools.Dockerfile
+      target: gau
+    volumes:
+      - ./output/dast/${TARGET_HOST:-target-host.example.com}:/out
+    entrypoint: ["sh", "-c"]
+    command:
+      - "gau --threads 5 ${TARGET_HOST:-target-host.example.com} > /out/gau-urls.txt"
+
+  waybackurls:
+    # Same rationale as gau above (no official image) -- also built locally. This
+    # tool only writes to stdout (no -o flag), hence the shell redirect -- same
+    # pattern as the trufflehog service above.
+    build:
+      context: ./docker
+      dockerfile: recon-tools.Dockerfile
+      target: waybackurls
+    volumes:
+      - ./output/dast/${TARGET_HOST:-target-host.example.com}:/out
+    entrypoint: ["sh", "-c"]
+    command:
+      - "echo ${TARGET_HOST:-target-host.example.com} | waybackurls > /out/waybackurls-urls.txt"
+
+  ffuf:
+    # Configured but NOT part of the default chain -- the 2026-07-06 assessment
+    # skipped ffuf entirely because both target-host.example.com and staging-target-host.example.com
+    # return a catch-all HTTP 200 for nonexistent paths (SPA history-mode fallback),
+    # which makes naive status-code fuzzing produce nothing but false positives.
+    # Before ever running this for real: request one deliberately-nonexistent path
+    # against TARGET_HOST, note the response size, and set -fs (filter-by-size) below
+    # to that value (or use -fc/-fw instead) -- otherwise ffuf will "find" every path.
+    #
+    # No official ffuf Docker image with a stable pinned tag as of this writing
+    # (community images exist but aren't from the ffuf maintainers) -- built locally,
+    # same as gau/waybackurls.
+    build:
+      context: ./docker
+      dockerfile: recon-tools.Dockerfile
+      target: ffuf
+    volumes:
+      - ./wordlists:/wordlists:ro   # not bundled -- see README "DAST recon chain"
+      - ./output/dast/${TARGET_HOST:-target-host.example.com}:/out
+    command:
+      - -u
+      - https://${TARGET_HOST:-target-host.example.com}/FUZZ
+      - -w
+      - /wordlists/raft-medium-directories.txt
+      - -mc
+      - "200,301,302,401,403"
+      - -fs
+      - "0"   # PLACEHOLDER -- set to the real catch-all response's byte size first (see comment above)
+      - -of
+      - json
+      - -o
+      - /out/ffuf-results.json
