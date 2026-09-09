@@ -34,29 +34,29 @@ Wraps the `dependency-check`, `dependency-check-update`, `trivy-fs`, `trivy-conf
 
 ## Steps
 
-1. `cd D:\Fapa\security-tools`. Resolve the target: if `target=` was given, set `TARGET_REPO`/`TARGET_NAME` inline for this invocation as described above (PowerShell: `$env:TARGET_REPO="..."; $env:TARGET_NAME="..."`); otherwise use `.env`'s existing values. Also confirm `NVD_API_KEY` in `.env` -- required for Dependency-Check unless the local database is already warm and `--noupdate` applies (it does by default in this compose file).
+1. Resolve the target: if `target=` was given, set `TARGET_REPO`/`TARGET_NAME` inline for this invocation as described above (PowerShell: `$env:TARGET_REPO="..."; $env:TARGET_NAME="..."`); otherwise use `.env`'s existing values. Every command below passes `-f D:\Fapa\security-tools\docker-compose.yml` explicitly -- never `cd` into that directory first (the Bash tool's working directory persists across calls in this session, so a `cd` here would silently break unrelated file lookups for the rest of the conversation). Also confirm `NVD_API_KEY` in `.env` -- required for Dependency-Check unless the local database is already warm and `--noupdate` applies (it does by default in this compose file).
 2. Pre-scan step (do this first, do not skip): run `mvn package` (Java) or `npm install` (JS/TS) inside the target repo. Skipping this reproduces the old report's `depcheck.log` undercount ("node_modules not found" warnings, degraded JS-tree accuracy).
 3. For each tool token given (or the default `dependency-check`+`trivy` pair if none given), run the matching command:
-   - `dependency-check` -> first check `dependency-check-data/` freshness (recently modified, no stale `.lock` file); if stale or first run on this machine, `docker compose run --rm dependency-check-update` first (never kill this mid-run -- can corrupt `odc.mv.db`). Then:
+   - `dependency-check` -> first check `dependency-check-data/` freshness (recently modified, no stale `.lock` file); if stale or first run on this machine, `docker compose -f D:\Fapa\security-tools\docker-compose.yml run --rm dependency-check-update` first (never kill this mid-run -- can corrupt `odc.mv.db`). Then:
      ```
-     docker compose run --rm dependency-check
+     docker compose -f D:\Fapa\security-tools\docker-compose.yml run --rm dependency-check
      ```
      Output: `output/sca/<TARGET_NAME>/dependency-check-report.{json,html,csv}`.
    - `trivy` ->
      ```
-     docker compose run --rm trivy-fs
+     docker compose -f D:\Fapa\security-tools\docker-compose.yml run --rm trivy-fs
      ```
      Output: `output/sca/<TARGET_NAME>/trivy-fs-report.json`.
    - `trivy-config` ->
      ```
-     docker compose run --rm trivy-config
+     docker compose -f D:\Fapa\security-tools\docker-compose.yml run --rm trivy-config
      ```
      Output: `output/sca/<TARGET_NAME>/trivy-config-report.json`.
    - `grype` -> requires a fresh SBOM (see the `sbom` skill) as input:
      ```
-     docker compose run --rm syft            # skip if sbom.cdx.json is already fresh
-     docker compose run --rm grype-db-update # only if the grype DB is >5 days stale
-     docker compose run --rm grype
+     docker compose -f D:\Fapa\security-tools\docker-compose.yml run --rm syft            # skip if sbom.cdx.json is already fresh
+     docker compose -f D:\Fapa\security-tools\docker-compose.yml run --rm grype-db-update # only if the grype DB is >5 days stale
+     docker compose -f D:\Fapa\security-tools\docker-compose.yml run --rm grype
      ```
      Output: `output/sca/<TARGET_NAME>/grype-report.json`.
 4. Cross-reference all findings by component + CVE:

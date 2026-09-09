@@ -35,24 +35,24 @@ The recon/discovery tools (`httpx`, `katana`, `gau`, `waybackurls`, `ffuf`) are 
 
 ## Steps
 
-1. `cd D:\Fapa\security-tools`. Resolve the target: if `target=` was given, set `TARGET_HOST` inline for this invocation (PowerShell: `$env:TARGET_HOST="..."`) -- validate it's one of the two authorized hosts first; otherwise use `.env`'s existing `TARGET_HOST` (still confirm it's one of the two authorized hosts).
+1. Resolve the target: if `target=` was given, set `TARGET_HOST` inline for this invocation (PowerShell: `$env:TARGET_HOST="..."`) -- validate it's one of the two authorized hosts first; otherwise use `.env`'s existing `TARGET_HOST` (still confirm it's one of the two authorized hosts). Every command below passes `-f D:\Fapa\security-tools\docker-compose.yml` explicitly -- never `cd` into that directory first (the Bash tool's working directory persists across calls in this session, so a `cd` here would silently break unrelated file lookups for the rest of the conversation).
 2. Always start with the safe, fast, passive-only scan (this runs regardless of `<variant>`):
    ```
-   docker compose run --rm zap-baseline
+   docker compose -f D:\Fapa\security-tools\docker-compose.yml run --rm zap-baseline
    ```
    Output: `output/dast/<TARGET_HOST>/zap-baseline_<TARGET_HOST>.{html,json,md}`.
 3. For each additional variant given (any of `api`, `full`, `auth` -- `baseline` alone needs no extra step since step 2 already covered it), run its matching command, one at a time, in this order regardless of how they were typed:
-   - `api` -> `docker compose run --rm zap-api` -- spec-driven active scan of declared OpenAPI endpoints (needs `TARGET_API_SPEC_URL` in `.env`)
-   - `full` -> `docker compose run --rm zap` -- full active scan of the whole site; slow and intrusive
-   - `auth` -> **not** a compose service, run directly:
+   - `api` -> `docker compose -f D:\Fapa\security-tools\docker-compose.yml run --rm zap-api` -- spec-driven active scan of declared OpenAPI endpoints (needs `TARGET_API_SPEC_URL` in `.env`)
+   - `full` -> `docker compose -f D:\Fapa\security-tools\docker-compose.yml run --rm zap` -- full active scan of the whole site; slow and intrusive
+   - `auth` -> **not** a compose service, run directly (absolute path in `-v`, not `${PWD}`, for the same cwd-independence reason as above):
      ```
-     docker run --rm -v "${PWD}/zap-auth:/zap/wrk" zaproxy/zap-stable:2.17.0 zap.sh -cmd -autorun /zap/wrk/automation.yaml
+     docker run --rm -v "D:\Fapa\security-tools\zap-auth:/zap/wrk" zaproxy/zap-stable:2.17.0 zap.sh -cmd -autorun /zap/wrk/automation.yaml
      ```
      Fill in real test-account credentials in `zap-auth/automation.yaml`'s `CHANGE_ME_USERNAME`/`CHANGE_ME_PASSWORD` placeholders locally only -- **never commit real credentials** into this tracked file. Expect hours, not minutes (this has taken close to its own 4-hour cap in practice).
 4. Verification tools:
    ```
-   docker compose run --rm nuclei
-   docker compose run --rm testssl
+   docker compose -f D:\Fapa\security-tools\docker-compose.yml run --rm nuclei
+   docker compose -f D:\Fapa\security-tools\docker-compose.yml run --rm testssl
    ```
    Output under `output/dast/<TARGET_HOST>/`.
 5. Summarize findings from the `output/dast/<TARGET_HOST>/*.json` files produced. The app-required `Frontend-Name` request header is already injected via each `zap-*` service's Replacer `-z` config -- no extra step needed. If asked to compare against `D:\Fapa\2026-07-15\`, cross-reference by finding/PT-ID (e.g. PT-09 for the CORS finding) rather than re-listing every result.

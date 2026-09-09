@@ -31,16 +31,16 @@ Wraps the `gitleaks` and `trufflehog` services in `D:\Fapa\security-tools\docker
 
 ## Steps
 
-1. `cd D:\Fapa\security-tools`. Resolve the target: if `target=` was given, set `TARGET_REPO`/`TARGET_NAME` inline for this invocation as described above (PowerShell: `$env:TARGET_REPO="..."; $env:TARGET_NAME="..."`); otherwise use `.env`'s existing values. The target must be an actual git checkout (`.git` present) -- both tools scan git history, not just the working tree.
+1. Resolve the target: if `target=` was given, set `TARGET_REPO`/`TARGET_NAME` inline for this invocation as described above (PowerShell: `$env:TARGET_REPO="..."; $env:TARGET_NAME="..."`); otherwise use `.env`'s existing values. Every command below passes `-f D:\Fapa\security-tools\docker-compose.yml` explicitly -- never `cd` into that directory first (the Bash tool's working directory persists across calls in this session, so a `cd` here would silently break unrelated file lookups for the rest of the conversation). The target must be an actual git checkout (`.git` present) -- both tools scan git history, not just the working tree.
 2. For each tool token given (or both, if none given), run the matching command:
    - `gitleaks` ->
      ```
-     docker compose run --rm gitleaks
+     docker compose -f D:\Fapa\security-tools\docker-compose.yml run --rm gitleaks
      ```
      Output: `output/secret/<TARGET_NAME>/gitleaks-report.sarif`.
    - `trufflehog` -> makes live outbound requests to each found secret's own provider to verify validity -- expected behavior, not a bug, and read-only/non-destructive:
      ```
-     docker compose run --rm trufflehog
+     docker compose -f D:\Fapa\security-tools\docker-compose.yml run --rm trufflehog
      ```
      Output: `output/secret/<TARGET_NAME>/trufflehog-verified.jsonl` (only-verified findings, by design -- see the service's `--only-verified` flag).
 3. Report findings with file/line/commit context where available. Treat any `trufflehog`-verified hit as high-confidence (it's confirmed live, not just pattern-matched) and prioritize it over an unverified `gitleaks` pattern match on the same secret.

@@ -27,10 +27,10 @@ Wraps the `semgrep` service in `D:\Fapa\security-tools\docker-compose.yml`. Neve
 
 ## Steps
 
-1. `cd D:\Fapa\security-tools`. Resolve the target: if `target=` was given, set `TARGET_REPO`/`TARGET_NAME` inline for this invocation as described above (PowerShell: `$env:TARGET_REPO="..."; $env:TARGET_NAME="..."`); otherwise use `.env`'s existing values.
+1. Resolve the target: if `target=` was given, set `TARGET_REPO`/`TARGET_NAME` inline for this invocation as described above (PowerShell: `$env:TARGET_REPO="..."; $env:TARGET_NAME="..."`); otherwise use `.env`'s existing values. Every command below passes `-f D:\Fapa\security-tools\docker-compose.yml` explicitly -- never `cd` into that directory first (the Bash tool's working directory persists across calls in this session, so a `cd` here would silently break unrelated file lookups for the rest of the conversation).
 2. Run:
    ```
-   docker compose run --rm semgrep
+   docker compose -f D:\Fapa\security-tools\docker-compose.yml run --rm semgrep
    ```
 3. Output: `output/sast/<TARGET_NAME>/semgrep-report.json`.
 4. Report findings grouped by severity/CWE. This ruleset (216 rules: `p/security-audit` + `p/owasp-top-ten` + `p/java` + `p/docker`) already exceeds the 2026-07-15 external assessment's captured run (92 rules actually executed per its `raw/semgrep.log`), so no config change is needed to match or exceed that baseline.
