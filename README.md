@@ -180,29 +180,6 @@ larger, much slower scan than `zap`/`zap-baseline`/`zap-api` above (expect
 `zap-auth/` itself, not under `output/dast/`, and are gitignored (only
 `automation.yaml`/`scripts/` are tracked).
 
-If you want a fast, precisely-scoped authenticated *or* unauthenticated check
-of one or two specific routes instead of the whole API, see
-`zap-endpoints/automation.yaml` below.
-
-### DAST — Targeted single-endpoint scan (`zap-endpoints/`)
-
-```powershell
-docker compose run --rm zap-endpoints
-```
-
-Runs a ZAP Automation Framework plan (`zap-endpoints/automation.yaml`)
-scoped to only the specific endpoints listed in its `context.includePaths` —
-currently `POST /api/entrance/login` and `DELETE /api/logout` — instead of
-crawling the whole site. Because ZAP's spider only issues GET requests, a
-`requestor` job seeds each endpoint with its real HTTP method/body first.
-Unlike `zap-auth/` above, `TARGET_HOST` still isn't docker-compose-substituted
-into this file (Automation Framework plans are static YAML) — its target
-host/paths are hardcoded and must be kept in sync with `TARGET_HOST` manually.
-Typically finishes in **a few minutes** — see that file's comments for the
-`requestor`-job quirks (its `headers:` field is broken in ZAP 2.17.0; use an
-extra `replacer` rule instead, as done there for both `Frontend-Name` and a
-forced `Content-Type` on the login POST).
-
 ### DAST recon chain — httpx / katana / gau / waybackurls / (optional) ffuf
 
 The original assessment ran these before zap/nuclei (stages

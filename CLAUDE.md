@@ -61,12 +61,6 @@ docker compose run --rm nuclei
 docker compose run --rm testssl
 # -> output/dast/<TARGET_HOST>/
 
-# DAST -- targeted scan of specific endpoints only (currently POST
-# /api/entrance/login + DELETE /api/logout), via the ZAP Automation Framework
-docker compose run --rm zap-endpoints
-# -> zap-endpoints/zap-endpoints-report.{html,json,md} (gitignored; only
-#    zap-endpoints/automation.yaml itself is tracked)
-
 # DAST -- full authenticated scan (logs in via username/password + TOTP, then
 # active-scans the entire /api/.* surface). NOT a docker-compose service --
 # run the image directly against the AF plan:
@@ -98,12 +92,10 @@ Only `target-host.example.com` and `staging-target-host.example.com` are authori
 - **`docker-compose.yml`** is the single source of truth for every tool: image tags,
   scan flags, exclude lists, and volume mounts. There's no wrapper script — read a
   service's `command:` block directly to see exactly what flags a scan runs with.
-  The two exceptions are `zap-auth/` and `zap-endpoints/automation.yaml` (used by
-  the `zap-endpoints` compose service) — ZAP Automation Framework plans, needed
-  wherever a scan requires more than a single `-t <url>` flag (a real login
-  session, or specific endpoints seeded with their real HTTP method/body).
-  `zap-auth/` predates `zap-endpoints/` and isn't wired into `docker-compose.yml`
-  at all — see the DAST commands above for both.
+  The one exception is `zap-auth/` — a ZAP Automation Framework plan, needed
+  because an authenticated scan requires more than a single `-t <url>` flag (a
+  real login session). It isn't wired into `docker-compose.yml` at all — see
+  the DAST commands above.
 - **`docker/recon-tools.Dockerfile`** builds `gau`, `waybackurls`, and `ffuf` locally
   (pinned `go install <module>@<tag/commit>` on `golang:alpine`, copied into a slim
   `alpine` runtime stage) because none of the three has a trustworthy, actively

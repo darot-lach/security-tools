@@ -319,24 +319,6 @@ services:
       - zap_${TARGET_HOST:-target-host.example.com}.md
       - -I
 
-  zap-endpoints:
-    # Targeted scan of specific endpoints only (currently POST
-    # /api/entrance/login + DELETE /api/logout) via the ZAP Automation
-    # Framework, instead of crawling the whole site like zap-baseline/zap-api/
-    # zap above. Edit zap-endpoints/automation.yaml to change which URLs/
-    # methods are targeted -- unlike every other service here, TARGET_HOST is
-    # NOT substituted into that file (Automation Framework plans are static
-    # YAML, not docker-compose interpolated), so its target host/paths are
-    # hardcoded there and must be kept in sync with TARGET_HOST manually.
-    image: zaproxy/zap-stable:2.17.0
-    volumes:
-      - ./zap-endpoints:/zap/wrk:rw
-    entrypoint: zap.sh
-    command:
-      - -cmd
-      - -autorun
-      - /zap/wrk/automation.yaml
-
   nuclei:
     image: projectdiscovery/nuclei:v3.11.1
     volumes:

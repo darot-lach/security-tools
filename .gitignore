@@ -6,14 +6,12 @@ output/
 backups/
 wordlists/
 
-# zap-endpoints/automation.yaml and zap-auth/automation.yaml + scripts/ are
-# tracked, reusable plans -- only their generated reports/logs are transient
-# output. No trailing slash so this matches both the report files
-# (report.html/json/md) and any report-asset directory ZAP creates alongside
-# them -- including numbered variants from repeat runs, e.g.
-# zap-endpoints-report2/ (ZAP suffixes a number rather than overwrite an
-# existing asset dir of the same name).
-zap-endpoints/zap-endpoints-report*
+# zap-auth/automation.yaml + scripts/ are a tracked, reusable plan -- only its
+# generated reports/logs are transient output. No trailing slash so this
+# matches both the report files (report.html/json/md) and any report-asset
+# directory ZAP creates alongside them -- including numbered variants from
+# repeat runs (ZAP suffixes a number rather than overwrite an existing asset
+# dir of the same name).
 zap-auth/zap-report*
 zap-auth/zap-authenticated-run.log
 
