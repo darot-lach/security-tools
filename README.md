@@ -233,7 +233,13 @@ category wraps more than one tool, space-separated tool/variant tokens (e.g.
 They only work when your current directory is `security-tools` itself (or a
 subdirectory) — that's how Claude Code scopes directory-local skills. Typing
 `/dast` while working in a sibling folder fails with "unknown command"; `cd` into
-`security-tools` first.
+`security-tools` first. If instead a step inside an already-resolved skill fails
+with `no configuration file provided: not found`, that means the working directory
+drifted away from `security-tools` again after the command was typed (e.g. a leftover
+`cd` from something else run earlier in the session) — `cd` back in and retry.
+
+`/sca grype` always regenerates the SBOM via `syft` first, unconditionally, so its
+results are never based on a stale prior SBOM.
 
 ## Keeping the Dependency-Check database warm
 

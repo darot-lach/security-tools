@@ -15,7 +15,7 @@ metadata:
 - `dependency-check` -- OWASP Dependency-Check (NVD/CPE-based)
 - `trivy` -- Trivy filesystem scan (`trivy-fs`)
 - `trivy-config` -- Trivy IaC/misconfig scan
-- `grype` -- 3rd-tool cross-check via SBOM (auto-runs its `syft`/`grype-db-update` prerequisites as needed)
+- `grype` -- 3rd-tool cross-check via SBOM (always regenerates a fresh SBOM via `syft` first, plus `grype-db-update` if the DB is stale)
 
 No tool tokens given = default to `dependency-check` + `trivy` (today's core pair, matching the old report's parallel-tools methodology). `trivy-config` and `grype` are opt-in extras layered on top -- they don't replace the default pair unless `dependency-check`/`trivy` are also typed explicitly with other tokens present (in which case run only what was listed).
 
@@ -52,8 +52,9 @@ Wraps the `dependency-check`, `dependency-check-update`, `trivy-fs`, `trivy-conf
      docker compose run --rm trivy-config
      ```
      Output: `output/sca/<TARGET_NAME>/trivy-config-report.json`.
-   - `grype` -> requires an SBOM as input (auto-generated, no confirmation needed -- cheap, non-destructive prerequisite): check whether `output/sbom/<TARGET_NAME>/sbom.cdx.json` exists; if it's missing, run `docker compose run --rm syft` first (if it already exists, skip straight to the next check -- existence alone counts as fresh enough; use the `sbom` skill separately first if you want to force a real regeneration). Then:
+   - `grype` -> requires an SBOM as input (auto-generated, no confirmation needed -- cheap, non-destructive prerequisite). Always regenerate it fresh, unconditionally -- don't check whether `sbom.cdx.json` already exists, since a stale SBOM (e.g. from before the target repo's latest dependency changes) would silently make `grype`'s results wrong:
      ```
+     docker compose run --rm syft
      docker compose run --rm grype-db-update # only if the grype DB is >5 days stale
      docker compose run --rm grype
      ```

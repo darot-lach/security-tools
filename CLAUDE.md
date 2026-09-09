@@ -111,6 +111,19 @@ are plain relative `docker compose run --rm <service>` — no `cd`, no absolute 
 needed inside the skill itself, since cwd is already guaranteed correct by the time
 it runs.
 
+Caveat observed in practice: the skill *resolving* (no "unknown command") only proves
+cwd was `security-tools`-scoped at the moment it was typed — it does **not** guarantee
+the agent's own shell cwd is still there by the time it actually runs the docker
+compose commands, if cwd drifted away in between (e.g. a `cd` left over from an
+earlier, unrelated command in the same session). If a step fails with `no
+configuration file provided: not found`, that's this — run `pwd` and `cd` back into
+`security-tools` before retrying, rather than assuming the skill guarantees it.
+
+`/sca grype` always regenerates the SBOM via `syft` before running, unconditionally —
+it does not check whether `output/sbom/<TARGET_NAME>/sbom.cdx.json` already exists,
+so results are never based on a stale SBOM from before the target's latest dependency
+changes.
+
 ## Architecture
 
 - **`docker-compose.yml`** is the single source of truth for every tool: image tags,
@@ -197,3 +210,9 @@ it runs.
   (or a subdirectory) at the moment it's typed — see "Claude Code Skills" above.
   This isn't a bug in the skill files; it's how Claude Code scopes directory-local
   skills. `cd` into `security-tools` and retry.
+- **A skill's own `docker compose` step fails with `no configuration file provided:
+  not found`** even though the skill itself resolved fine — the skill resolving only
+  proves cwd was `security-tools`-scoped at the moment it was *typed*, not that it's
+  still there when the step actually *runs*; cwd can drift away in between from an
+  earlier, unrelated command left over in the same session. Run `pwd`, `cd` back into
+  `security-tools`, and retry the step.
