@@ -44,19 +44,20 @@ services:
       - ${TARGET_REPO:-../projects/backend-service}:/repo
       - ./.trivy-cache:/root/.cache
       - ./output/sca/${TARGET_NAME:-backend-service}:/out
+    # Overridden to sh -c so a second `trivy convert` can render an HTML report
+    # from the JSON one, using the html.tpl template bundled in this image at
+    # /contrib/html.tpl (confirmed present 2026-09-09) -- trivy's own --format
+    # flag only accepts one value at a time, so JSON (primary/machine-readable)
+    # and HTML (human-readable) each need their own trivy invocation.
+    entrypoint: ["sh", "-c"]
     command:
-      - fs
-      - --timeout=20m
-      - --offline-scan   # required for Java repos: avoids live Maven Central lookups
-                         # that get 429 rate-limited (30 min IP block observed)
-      - --scanners=vuln,misconfig,secret
-      - --severity=HIGH,CRITICAL
-      - --ignore-unfixed
-      - --skip-dirs=node_modules,target,coverage,.git,.claude,.idea,dependency-check-data,zap,backup,grafana-data,prometheus-data,logs,jvm-monitoring-stack,keys,file-storage
-      - --skip-files=stagging.sql
-      - --format=json
-      - --output=/out/trivy-fs-report.json
-      - /repo
+      - >
+        trivy fs --timeout=20m --offline-scan
+        --scanners=vuln,misconfig,secret --severity=HIGH,CRITICAL --ignore-unfixed
+        --skip-dirs=node_modules,target,coverage,.git,.claude,.idea,dependency-check-data,zap,backup,grafana-data,prometheus-data,logs,jvm-monitoring-stack,keys,file-storage
+        --skip-files=stagging.sql --format=json --output=/out/trivy-fs-report.json /repo &&
+        trivy convert --scanners=vuln,misconfig,secret --format template
+        --template "@/contrib/html.tpl" --output=/out/trivy-fs-report.html /out/trivy-fs-report.json
 
   trivy-config:
     image: aquasec/trivy:0.74.0
@@ -64,14 +65,14 @@ services:
       - ${TARGET_REPO:-../projects/backend-service}:/repo
       - ./.trivy-cache:/root/.cache
       - ./output/sca/${TARGET_NAME:-backend-service}:/out
+    entrypoint: ["sh", "-c"]  # see trivy-fs above for why: convert needs a 2nd trivy invocation
     command:
-      - config
-      - --timeout=20m
-      - --severity=HIGH,CRITICAL,MEDIUM,LOW
-      - --skip-dirs=node_modules,target,coverage,.git,.claude,.idea,dependency-check-data,zap,backup,grafana-data,prometheus-data,logs,jvm-monitoring-stack,keys,file-storage
-      - --format=json
-      - --output=/out/trivy-config-report.json
-      - /repo
+      - >
+        trivy config --timeout=20m --severity=HIGH,CRITICAL,MEDIUM,LOW
+        --skip-dirs=node_modules,target,coverage,.git,.claude,.idea,dependency-check-data,zap,backup,grafana-data,prometheus-data,logs,jvm-monitoring-stack,keys,file-storage
+        --format=json --output=/out/trivy-config-report.json /repo &&
+        trivy convert --scanners=misconfig --format template
+        --template "@/contrib/html.tpl" --output=/out/trivy-config-report.html /out/trivy-config-report.json
 
   gitleaks:
     # Full git-history secret scan (all branches/commits), not just the working tree --
@@ -359,6 +360,8 @@ services:
     command:
       - --jsonfile
       - /data/testssl_${TARGET_HOST:-target-host.example.com}.json
+      - --htmlfile
+      - /data/testssl_${TARGET_HOST:-target-host.example.com}.html
       - --severity
       - LOW
       - ${TARGET_HOST:-target-host.example.com}
@@ -468,6 +471,7 @@ services:
       - -fs
       - "0"   # PLACEHOLDER -- set to the real catch-all response's byte size first (see comment above)
       - -of
-      - json
+      - all   # writes ffuf-results.{json,ejson,html,md,csv,ecsv} -- ffuf appends the
+              # extension per format itself, so -o below must be a bare basename
       - -o
-      - /out/ffuf-results.json
+      - /out/ffuf-results
