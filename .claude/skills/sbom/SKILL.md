@@ -31,17 +31,17 @@ Wraps the `syft` and `cdxgen` services in `D:\Fapa\security-tools\docker-compose
 
 ## Steps
 
-1. Resolve the target: if `target=` was given, set `TARGET_REPO`/`TARGET_NAME` inline for this invocation as described above (PowerShell: `$env:TARGET_REPO="..."; $env:TARGET_NAME="..."`); otherwise use `.env`'s existing values. Every command below passes `-f D:\Fapa\security-tools\docker-compose.yml` explicitly -- never `cd` into that directory first (the Bash tool's working directory persists across calls in this session, so a `cd` here would silently break unrelated file lookups for the rest of the conversation). `D:\Fapa\security-tools` assumes this clone's usual location -- if this invocation's own "Base directory for this skill: `<path>`" line ends in something other than `...\.claude\skills\sbom`, strip that suffix from it instead to get the real repo root, and use that in place of `D:\Fapa\security-tools` everywhere below.
+1. This skill only resolves as `/sbom` when the session's current directory is already `security-tools` (or a subdirectory of it) -- that's how Claude Code scopes directory-local skills, so by the time these steps run, plain relative `docker compose` commands (no `cd`, no absolute path) are already correct. Resolve the target: if `target=` was given, set `TARGET_REPO`/`TARGET_NAME` inline for this invocation (PowerShell: `$env:TARGET_REPO="..."; $env:TARGET_NAME="..."`); otherwise use `.env`'s existing values.
 2. Pre-scan step (do this first, do not skip): run `mvn package` (Java) or `npm install` (JS/TS) inside the target repo. The 2026-07-15 assessment's cdxgen run silently fell back to a **direct-dependencies-only** SBOM for the Maven service after its `cyclonedx-maven-plugin` and `mvn dependency:tree` both failed (a Windows Maven path-quoting bug) -- skipping this step reproduces that same degraded, incomplete result.
 3. For each tool token given (or both, if none given), run the matching command:
    - `syft` ->
      ```
-     docker compose -f D:\Fapa\security-tools\docker-compose.yml run --rm syft
+     docker compose run --rm syft
      ```
      Output: `output/sbom/<TARGET_NAME>/sbom.cdx.json`, `sbom.spdx.json`.
    - `cdxgen` ->
      ```
-     docker compose -f D:\Fapa\security-tools\docker-compose.yml run --rm cdxgen
+     docker compose run --rm cdxgen
      ```
      Output: `output/sbom/<TARGET_NAME>/cdxgen-sbom.cdx.json`.
 4. Note: `sbom.cdx.json` (from the `syft` step) is what the `sca` skill's optional Grype step consumes as input. Run this `sbom` skill (with `syft` included) before `sca`'s Grype step if it hasn't already produced a fresh SBOM for the target.

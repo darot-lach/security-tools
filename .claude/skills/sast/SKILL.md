@@ -27,10 +27,10 @@ Wraps the `semgrep` service in `D:\Fapa\security-tools\docker-compose.yml`. Neve
 
 ## Steps
 
-1. Resolve the target: if `target=` was given, set `TARGET_REPO`/`TARGET_NAME` inline for this invocation as described above (PowerShell: `$env:TARGET_REPO="..."; $env:TARGET_NAME="..."`); otherwise use `.env`'s existing values. Every command below passes `-f D:\Fapa\security-tools\docker-compose.yml` explicitly -- never `cd` into that directory first (the Bash tool's working directory persists across calls in this session, so a `cd` here would silently break unrelated file lookups for the rest of the conversation). `D:\Fapa\security-tools` assumes this clone's usual location -- if this invocation's own "Base directory for this skill: `<path>`" line ends in something other than `...\.claude\skills\sast`, strip that suffix from it instead to get the real repo root, and use that in place of `D:\Fapa\security-tools` everywhere below.
+1. This skill only resolves as `/sast` when the session's current directory is already `security-tools` (or a subdirectory of it) -- that's how Claude Code scopes directory-local skills, so by the time these steps run, plain relative `docker compose` commands (no `cd`, no absolute path) are already correct. Resolve the target: if `target=` was given, set `TARGET_REPO`/`TARGET_NAME` inline for this invocation (PowerShell: `$env:TARGET_REPO="..."; $env:TARGET_NAME="..."`); otherwise use `.env`'s existing values.
 2. Run:
    ```
-   docker compose -f D:\Fapa\security-tools\docker-compose.yml run --rm semgrep
+   docker compose run --rm semgrep
    ```
 3. Output: `output/sast/<TARGET_NAME>/semgrep-report.json`.
 4. Report findings grouped by severity/CWE. This ruleset (216 rules: `p/security-audit` + `p/owasp-top-ten` + `p/java` + `p/docker`) already exceeds the 2026-07-15 external assessment's captured run (92 rules actually executed per its `raw/semgrep.log`), so no config change is needed to match or exceed that baseline.
