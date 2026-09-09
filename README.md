@@ -135,13 +135,73 @@ verification (`--only-verified`) — an empty file is a clean result, not a fail
 ### DAST — ZAP / Nuclei / testssl.sh
 ```powershell
 $env:TARGET_HOST = "target-host.example.com"
-docker compose run --rm zap
+docker compose run --rm zap-baseline   # passive-only, fast, non-intrusive
+docker compose run --rm zap-api        # spec-driven active scan (needs TARGET_API_SPEC_URL)
+docker compose run --rm zap            # full active scan, intrusive/slow
 docker compose run --rm nuclei
 docker compose run --rm testssl
 ```
+`zap-api` targets `TARGET_API_SPEC_URL` (an OpenAPI/Swagger JSON/YAML URL), not
+`TARGET_HOST` directly — defaults to `https://target-host.example.com/v3/api-docs`
+(a springdoc-based Spring Boot app's default path); set it explicitly alongside
+`TARGET_HOST` in `.env` if it doesn't match. All three write `.html`, `.json`, and
+`.md` reports.
+
 Output under `output/dast/<TARGET_HOST>/`. Only run these against hosts you're
 authorized to test — `target-host.example.com` / `staging-target-host.example.com` are the two
 hosts the original assessment covered.
+
+### DAST — Authenticated full scan (`zap-auth/`)
+
+Unlike every service above, this is **not** wired into `docker-compose.yml` —
+it's a ZAP Automation Framework plan (`zap-auth/automation.yaml` +
+`zap-auth/scripts/totp-login.js`) run directly against the ZAP image, because
+it needs a real login+TOTP session rather than a single `-t <url>` flag:
+
+```powershell
+docker run --rm -v "${PWD}/zap-auth:/zap/wrk" zaproxy/zap-stable:2.17.0 `
+  zap.sh -cmd -autorun /zap/wrk/automation.yaml
+```
+
+Before running: **fill in a real test account's `Username`/`Password`** in
+`automation.yaml`'s `users:` block (currently `CHANGE_ME_USERNAME`/
+`CHANGE_ME_PASSWORD` placeholders) **locally only, and never commit that
+edit** — this file is tracked in git; see the credential-hygiene comment at
+the top of `automation.yaml` (the same mistake as PT-02 in the 2026-07-15
+pentest report — a committed secret persists in git history even after the
+line is later deleted).
+
+This logs in via `/api/entrance/login` + `/api/totp/verify` (or skips TOTP
+automatically if the test account has no MFA challenge), then runs a spider +
+active scan across the **entire authenticated `/api/.*` surface** — a much
+larger, much slower scan than `zap`/`zap-baseline`/`zap-api` above (expect
+**hours, not minutes** — a full authenticated run has taken close to its own
+4-hour cap in practice). Reports (`zap-report.html/json/md`) land in
+`zap-auth/` itself, not under `output/dast/`, and are gitignored (only
+`automation.yaml`/`scripts/` are tracked).
+
+If you want a fast, precisely-scoped authenticated *or* unauthenticated check
+of one or two specific routes instead of the whole API, see
+`zap-endpoints/automation.yaml` below.
+
+### DAST — Targeted single-endpoint scan (`zap-endpoints/`)
+
+```powershell
+docker compose run --rm zap-endpoints
+```
+
+Runs a ZAP Automation Framework plan (`zap-endpoints/automation.yaml`)
+scoped to only the specific endpoints listed in its `context.includePaths` —
+currently `POST /api/entrance/login` and `DELETE /api/logout` — instead of
+crawling the whole site. Because ZAP's spider only issues GET requests, a
+`requestor` job seeds each endpoint with its real HTTP method/body first.
+Unlike `zap-auth/` above, `TARGET_HOST` still isn't docker-compose-substituted
+into this file (Automation Framework plans are static YAML) — its target
+host/paths are hardcoded and must be kept in sync with `TARGET_HOST` manually.
+Typically finishes in **a few minutes** — see that file's comments for the
+`requestor`-job quirks (its `headers:` field is broken in ZAP 2.17.0; use an
+extra `replacer` rule instead, as done there for both `Frontend-Name` and a
+forced `Content-Type` on the login POST).
 
 ### DAST recon chain — httpx / katana / gau / waybackurls / (optional) ffuf
 

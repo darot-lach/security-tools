@@ -1,0 +1,149 @@
+---
+# Authenticated ZAP scan of user-account-service's API, reached via the
+# develop-fapa.allweb.cloud host. Based on the app's own
+# projects/user-account-service/zap/automation.yaml, with __TARGET__ filled in
+# for this run. totp-login.js handles an account with no TOTP/MFA enabled
+# (skips the verify step if no MFA challenge cookie comes back), so the TOTP
+# Secret field can stay blank for such an account.
+#
+# CREDENTIALS: Username/Password below are placeholders -- this file is
+# tracked in git, so never fill in a real credential here and commit it (see
+# PT-02 in 2026-07-15's pentest report for exactly this mistake with a
+# SonarQube token: a committed secret persists in git history even after the
+# line is later deleted or the secret is rotated). Fill in a real test
+# account's credentials locally only, and keep that local edit uncommitted.
+env:
+  contexts:
+    - name: "user-account-service"
+      urls:
+        - "https://develop-fapa.allweb.cloud"
+      includePaths:
+        - "https://develop-fapa.allweb.cloud/api/.*"
+      excludePaths:
+        - "https://develop-fapa.allweb.cloud/api/entrance/login.*"
+        - "https://develop-fapa.allweb.cloud/api/totp/.*"
+        - "https://develop-fapa.allweb.cloud/api/refresh.*"
+        - "https://develop-fapa.allweb.cloud/healthz/.*"
+      authentication:
+        method: "script"
+        parameters:
+          script: "/zap/wrk/scripts/totp-login.js"
+          scriptEngine: "Graal.js"
+          Target URL: "https://develop-fapa.allweb.cloud"
+        verification:
+          method: "poll"
+          pollUrl: "https://develop-fapa.allweb.cloud/api/me"
+          pollHttpMethod: "GET"
+          pollFrequency: 10
+          pollUnits: "requests"
+          loggedInRegex: "\\Q\"userRights\"\\E"
+          loggedOutRegex: "\\Q\"err_unauthorized\"\\E"
+      sessionManagement:
+        method: "cookie"
+      users:
+        - name: "zap-test-user"
+          credentials:
+            Username: "CHANGE_ME_USERNAME"
+            Password: "CHANGE_ME_PASSWORD"
+            TOTP Secret: ""
+  parameters:
+    failOnError: false
+    progressToStdout: true
+
+jobs:
+  - type: replacer
+    parameters: {}
+    rules:
+      - description: "Add Frontend-Name header (app requires this on every request)"
+        url: ".*"
+        matchType: "REQ_HEADER"
+        matchString: "Frontend-Name"
+        replacementString: "SPA"
+        tokenProcessing: false
+        initiators: []
+
+  - type: openapi
+    parameters:
+      apiUrl: "https://develop-fapa.allweb.cloud/v3/api-docs"
+      targetUrl: "https://develop-fapa.allweb.cloud"
+      context: "user-account-service"
+
+  - type: passiveScan-config
+    parameters:
+      maxAlertsPerRule: 0
+
+  - type: spider
+    parameters:
+      context: "user-account-service"
+      user: "zap-test-user"
+      url: "https://develop-fapa.allweb.cloud"
+      maxDuration: 20
+
+  - type: passiveScan-wait
+    parameters:
+      maxDuration: 10
+
+  - type: activeScan-config
+    parameters:
+      maxAlertsPerRule: 0
+    inputVectors:
+      urlQueryStringAndDataDrivenNodes:
+        enabled: true
+      postData:
+        enabled: true
+        multiPartFormData: true
+        xml: true
+        json:
+          enabled: true
+          scanNullValues: true
+      urlPath: true
+      httpHeaders:
+        enabled: true
+        allRequests: true
+      cookieData:
+        enabled: true
+      scripts: true
+
+  - type: activeScan
+    parameters:
+      context: "user-account-service"
+      user: "zap-test-user"
+      policy: "Default Policy"
+      defaultStrength: "High"
+      defaultThreshold: "Low"
+      maxRuleDurationInMins: 20
+      maxScanDurationInMins: 240
+
+  - type: passiveScan-wait
+    parameters:
+      maxDuration: 20
+
+  - type: report
+    parameters:
+      template: "modern"
+      reportDir: "/zap/wrk"
+      reportFile: "zap-report"
+      reportTitle: "user-account-service DAST Report (develop, authenticated)"
+      reportDescription:
+        "Authenticated ZAP active scan of user-account-service via develop-fapa.allweb.cloud"
+    risks:
+      - low
+      - medium
+      - high
+    confidences:
+      - low
+      - medium
+      - high
+      - confirmed
+
+  - type: report
+    parameters:
+      template: "traditional-json"
+      reportDir: "/zap/wrk"
+      reportFile: "zap-report"
+
+  - type: report
+    parameters:
+      template: "traditional-md"
+      reportDir: "/zap/wrk"
+      reportFile: "zap-report"

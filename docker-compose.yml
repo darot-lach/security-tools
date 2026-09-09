@@ -204,6 +204,8 @@ services:
     command:
       - --scan=/src
       - --format=JSON
+      - --format=HTML
+      - --format=CSV
       - --project=${TARGET_NAME:-backend-service}
       - --out=/report
       - --exclude=**/node_modules/**
@@ -220,6 +222,12 @@ services:
       - --exclude=**/.idea/**
       - --exclude=**/.claude/**
       - --nvdApiKey=${NVD_API_KEY}
+      # DB confirmed warm and clean (no odc.update.lock) as of this change --
+      # per CLAUDE.md's own "once you trust the update job" guidance, scans
+      # no longer touch the network at all. Run `dependency-check-update`
+      # periodically (or whenever NVD_API_KEY is actually filled in) to keep
+      # data/ from going stale instead.
+      - --noupdate
       # NOTE: target/ is intentionally NOT excluded -- it holds the built Spring Boot
       # fat jar (BOOT-INF/lib/*.jar), which is what Dependency-Check's Jar Analyzer
       # needs to hash to actually identify the resolved dependency tree. Excluding it
@@ -240,6 +248,57 @@ services:
       - --updateonly
       - --nvdApiKey=${NVD_API_KEY}
 
+  zap-baseline:
+    # Passive-only, fast, non-intrusive -- checks headers/cookies/info leakage
+    # without ever sending attack payloads. Safe to run against anything the
+    # full/active zap service below is authorized against.
+    image: zaproxy/zap-stable:2.17.0
+    volumes:
+      - ./output/dast/${TARGET_HOST:-target-host.example.com}:/zap/wrk:rw
+    entrypoint: zap-baseline.py
+    command:
+      - -t
+      - https://${TARGET_HOST:-target-host.example.com}
+      # Backend requires a non-blank Frontend-Name header on every request
+      # outside a small allowlist (FrontendWhiteListFilter.java) or it 401s
+      # before reaching Spring Security -- add it via ZAP's Replacer add-on,
+      # same technique zap-auth/automation.yaml's `replacer` job uses.
+      - -z
+      - "-config replacer.full_list(0).description=Add-Frontend-Name-header -config replacer.full_list(0).enabled=true -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Frontend-Name -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=ZAP"
+      - -r
+      - zap-baseline_${TARGET_HOST:-target-host.example.com}.html
+      - -J
+      - zap-baseline_${TARGET_HOST:-target-host.example.com}.json
+      - -w
+      - zap-baseline_${TARGET_HOST:-target-host.example.com}.md
+      - -I
+
+  zap-api:
+    # Spec-driven scan (OpenAPI/Swagger) -- targeted at declared endpoints
+    # instead of blind crawling. Runs an active scan against them, same
+    # intrusiveness class as the full zap service below, just spec-scoped.
+    # TARGET_API_SPEC_URL defaults to this app's springdoc OpenAPI JSON path.
+    image: zaproxy/zap-stable:2.17.0
+    volumes:
+      - ./output/dast/${TARGET_HOST:-target-host.example.com}:/zap/wrk:rw
+    entrypoint: zap-api-scan.py
+    command:
+      - -t
+      - ${TARGET_API_SPEC_URL:-https://target-host.example.com/v3/api-docs}
+      - -f
+      - openapi
+      # Same Frontend-Name header requirement as zap-baseline above --
+      # required on /api/** even though /v3/** itself is allowlisted.
+      - -z
+      - "-config replacer.full_list(0).description=Add-Frontend-Name-header -config replacer.full_list(0).enabled=true -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Frontend-Name -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=ZAP"
+      - -r
+      - zap-api_${TARGET_HOST:-target-host.example.com}.html
+      - -J
+      - zap-api_${TARGET_HOST:-target-host.example.com}.json
+      - -w
+      - zap-api_${TARGET_HOST:-target-host.example.com}.md
+      - -I
+
   zap:
     image: zaproxy/zap-stable:2.17.0
     volumes:
@@ -248,9 +307,34 @@ services:
     command:
       - -t
       - https://${TARGET_HOST:-target-host.example.com}
+      # Same Frontend-Name header requirement as zap-baseline above.
+      - -z
+      - "-config replacer.full_list(0).description=Add-Frontend-Name-header -config replacer.full_list(0).enabled=true -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Frontend-Name -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=ZAP"
+      - -r
+      - zap_${TARGET_HOST:-target-host.example.com}.html
       - -J
       - zap_${TARGET_HOST:-target-host.example.com}.json
+      - -w
+      - zap_${TARGET_HOST:-target-host.example.com}.md
       - -I
+
+  zap-endpoints:
+    # Targeted scan of specific endpoints only (currently POST
+    # /api/entrance/login + DELETE /api/logout) via the ZAP Automation
+    # Framework, instead of crawling the whole site like zap-baseline/zap-api/
+    # zap above. Edit zap-endpoints/automation.yaml to change which URLs/
+    # methods are targeted -- unlike every other service here, TARGET_HOST is
+    # NOT substituted into that file (Automation Framework plans are static
+    # YAML, not docker-compose interpolated), so its target host/paths are
+    # hardcoded there and must be kept in sync with TARGET_HOST manually.
+    image: zaproxy/zap-stable:2.17.0
+    volumes:
+      - ./zap-endpoints:/zap/wrk:rw
+    entrypoint: zap.sh
+    command:
+      - -cmd
+      - -autorun
+      - /zap/wrk/automation.yaml
 
   nuclei:
     image: projectdiscovery/nuclei:v3.11.1

@@ -1,0 +1,127 @@
+---
+# Targeted ZAP scan of two specific endpoints only -- POST /api/entrance/login
+# and DELETE /api/logout (LoginController.java:32, LogoutController.java:21) --
+# instead of crawling the whole site like zap-baseline/zap-api/zap do.
+#
+# TARGET_HOST is NOT substituted here (Automation Framework plans are static
+# YAML, unlike docker-compose's own ${VAR} interpolation) -- hardcoded to
+# develop-fapa.allweb.cloud, the authorized host used elsewhere this session.
+# Update both `urls`/`includePaths` below and the `requestor` job's `url`
+# fields together if you point this at a different host.
+#
+# No login/session is performed -- the `requestor` job below seeds each
+# endpoint with its real HTTP method (ZAP's default GET-only spider can't
+# reach a POST-only/DELETE-only route) using an intentionally invalid test
+# credential, purely so passive/active scan have a real request+response to
+# analyze (headers, CORS, error handling) for these two exact routes -- the
+# same routes flagged in 2026-07-15's pentest report (PT-09 CORS
+# misconfiguration on /api/logout).
+env:
+  contexts:
+    - name: "login-logout-endpoints"
+      urls:
+        - "https://develop-fapa.allweb.cloud/api/entrance/login"
+        - "https://develop-fapa.allweb.cloud/api/logout"
+      includePaths:
+        - "https://develop-fapa.allweb.cloud/api/entrance/login.*"
+        - "https://develop-fapa.allweb.cloud/api/logout.*"
+  parameters:
+    failOnError: false
+    progressToStdout: true
+
+jobs:
+  - type: replacer
+    parameters: {}
+    rules:
+      - description: "Add Frontend-Name header (app requires this on every request)"
+        url: ".*"
+        matchType: "REQ_HEADER"
+        matchString: "Frontend-Name"
+        replacementString: "ZAP"
+        tokenProcessing: false
+        initiators: []
+      # requestor's own `headers:` field can't be used (see note below), so
+      # the login POST's required Content-Type is forced here instead --
+      # scoped to just this URL so it doesn't affect the logout DELETE.
+      # Verified: without this, curl defaults to form-encoding and the app
+      # rejects it with 400 "Content-Type ... is not supported" before ever
+      # reaching the credential check.
+      - description: "Force JSON Content-Type on the login POST"
+        url: ".*/api/entrance/login.*"
+        matchType: "REQ_HEADER"
+        matchString: "Content-Type"
+        replacementString: "application/json"
+        tokenProcessing: false
+        initiators: []
+      # Re-test PT-09 (pentest report 2026-07-15): a spoofed cross-origin
+      # Origin on the exact route that was flagged, to see whether it gets
+      # reflected back in Access-Control-Allow-Origin. The seeded request
+      # otherwise carries no Origin header at all (unlike a real browser),
+      # so without this the CORS-misconfiguration check has nothing to test.
+      - description: "Add spoofed cross-origin Origin header to re-test PT-09 CORS finding"
+        url: ".*/api/logout.*"
+        matchType: "REQ_HEADER"
+        matchString: "Origin"
+        replacementString: "https://evil.example"
+        tokenProcessing: false
+        initiators: []
+
+  - type: requestor
+    parameters: {}
+    requests:
+      # No `headers:` field -- ZAP 2.17.0's requestor job fails to set it from
+      # plain YAML ("unsupported type: java.util.List"), which aborts the
+      # whole plan before any job runs; Content-Type is injected via the
+      # replacer job above instead.
+      - url: "https://develop-fapa.allweb.cloud/api/entrance/login"
+        method: "POST"
+        data: '{"username":"zap-scan-test@example.com","password":"Zap-Test-Invalid-Password!23","rememberMe":false}'
+        name: "seed-login"
+      - url: "https://develop-fapa.allweb.cloud/api/logout"
+        method: "DELETE"
+        name: "seed-logout"
+
+  - type: passiveScan-wait
+    parameters:
+      maxDuration: 5
+
+  - type: activeScan
+    parameters:
+      context: "login-logout-endpoints"
+      policy: "Default Policy"
+      maxRuleDurationInMins: 10
+      maxScanDurationInMins: 15
+
+  - type: passiveScan-wait
+    parameters:
+      maxDuration: 5
+
+  - type: report
+    parameters:
+      template: "modern"
+      reportDir: "/zap/wrk"
+      reportFile: "zap-endpoints-report"
+      reportTitle: "user-account-service - Targeted endpoint DAST (login/logout)"
+      reportDescription:
+        "Focused ZAP scan of POST /api/entrance/login and DELETE /api/logout only"
+    risks:
+      - low
+      - medium
+      - high
+    confidences:
+      - low
+      - medium
+      - high
+      - confirmed
+
+  - type: report
+    parameters:
+      template: "traditional-json"
+      reportDir: "/zap/wrk"
+      reportFile: "zap-endpoints-report"
+
+  - type: report
+    parameters:
+      template: "traditional-md"
+      reportDir: "/zap/wrk"
+      reportFile: "zap-endpoints-report"

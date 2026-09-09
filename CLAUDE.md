@@ -54,10 +54,29 @@ docker compose run --rm cdxgen
 
 # DAST -- against a live, authorized host only
 $env:TARGET_HOST = "target-host.example.com"
-docker compose run --rm zap
+docker compose run --rm zap-baseline   # passive-only, fast, non-intrusive
+docker compose run --rm zap-api        # spec-driven active scan, needs TARGET_API_SPEC_URL
+docker compose run --rm zap            # full active scan, intrusive/slow
 docker compose run --rm nuclei
 docker compose run --rm testssl
 # -> output/dast/<TARGET_HOST>/
+
+# DAST -- targeted scan of specific endpoints only (currently POST
+# /api/entrance/login + DELETE /api/logout), via the ZAP Automation Framework
+docker compose run --rm zap-endpoints
+# -> zap-endpoints/zap-endpoints-report.{html,json,md} (gitignored; only
+#    zap-endpoints/automation.yaml itself is tracked)
+
+# DAST -- full authenticated scan (logs in via username/password + TOTP, then
+# active-scans the entire /api/.* surface). NOT a docker-compose service --
+# run the image directly against the AF plan:
+docker run --rm -v "${PWD}/zap-auth:/zap/wrk" zaproxy/zap-stable:2.17.0 zap.sh -cmd -autorun /zap/wrk/automation.yaml
+# Fill in zap-auth/automation.yaml's CHANGE_ME_USERNAME/CHANGE_ME_PASSWORD
+# with a real test account LOCALLY ONLY -- never commit real credentials into
+# this tracked file (see its header comment). Expect hours, not minutes: a
+# full authenticated run has taken close to its own 4-hour cap in practice.
+# -> zap-auth/zap-report.{html,json,md} (gitignored; only automation.yaml and
+#    scripts/ are tracked)
 
 # DAST recon chain -- standalone/additive, run before zap/nuclei if you want the
 # original assessment's recon coverage (none of these auto-feed another service)
@@ -79,6 +98,12 @@ Only `target-host.example.com` and `staging-target-host.example.com` are authori
 - **`docker-compose.yml`** is the single source of truth for every tool: image tags,
   scan flags, exclude lists, and volume mounts. There's no wrapper script — read a
   service's `command:` block directly to see exactly what flags a scan runs with.
+  The two exceptions are `zap-auth/` and `zap-endpoints/automation.yaml` (used by
+  the `zap-endpoints` compose service) — ZAP Automation Framework plans, needed
+  wherever a scan requires more than a single `-t <url>` flag (a real login
+  session, or specific endpoints seeded with their real HTTP method/body).
+  `zap-auth/` predates `zap-endpoints/` and isn't wired into `docker-compose.yml`
+  at all — see the DAST commands above for both.
 - **`docker/recon-tools.Dockerfile`** builds `gau`, `waybackurls`, and `ffuf` locally
   (pinned `go install <module>@<tag/commit>` on `golang:alpine`, copied into a slim
   `alpine` runtime stage) because none of the three has a trustworthy, actively
