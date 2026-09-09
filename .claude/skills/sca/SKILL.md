@@ -52,9 +52,8 @@ Wraps the `dependency-check`, `dependency-check-update`, `trivy-fs`, `trivy-conf
      docker compose run --rm trivy-config
      ```
      Output: `output/sca/<TARGET_NAME>/trivy-config-report.json`.
-   - `grype` -> requires a fresh SBOM (see the `sbom` skill) as input:
+   - `grype` -> requires an SBOM as input (auto-generated, no confirmation needed -- cheap, non-destructive prerequisite): check whether `output/sbom/<TARGET_NAME>/sbom.cdx.json` exists; if it's missing, run `docker compose run --rm syft` first (if it already exists, skip straight to the next check -- existence alone counts as fresh enough; use the `sbom` skill separately first if you want to force a real regeneration). Then:
      ```
-     docker compose run --rm syft            # skip if sbom.cdx.json is already fresh
      docker compose run --rm grype-db-update # only if the grype DB is >5 days stale
      docker compose run --rm grype
      ```
