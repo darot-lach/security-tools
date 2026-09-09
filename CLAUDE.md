@@ -38,7 +38,9 @@ docker compose run --rm semgrep
 # SCA -- Trivy filesystem + IaC/config scan
 docker compose run --rm trivy-fs
 docker compose run --rm trivy-config
-# -> output/sca/<TARGET_NAME>/trivy-fs-report.json, trivy-config-report.json
+# -> output/sca/<TARGET_NAME>/{trivy-fs,trivy-config}-report.{json,html}
+# (HTML via a second `trivy convert` invocation against the bundled /contrib/html.tpl
+# template -- trivy's own --format flag only accepts one value at a time)
 
 # SCA -- OWASP Dependency-Check (first run syncs the full NVD dataset, hours;
 # see "Dependency-Check database" below to avoid repeating that)
@@ -58,7 +60,7 @@ docker compose run --rm zap-baseline   # passive-only, fast, non-intrusive
 docker compose run --rm zap-api        # spec-driven active scan, needs TARGET_API_SPEC_URL
 docker compose run --rm zap            # full active scan, intrusive/slow
 docker compose run --rm nuclei
-docker compose run --rm testssl
+docker compose run --rm testssl        # writes both --jsonfile and --htmlfile
 # -> output/dast/<TARGET_HOST>/
 
 # DAST -- full authenticated scan (logs in via username/password + TOTP, then
@@ -82,10 +84,32 @@ docker compose run --rm waybackurls   # built locally on first use
 # `ffuf` exists but is NOT run by default -- both authorized hosts return a
 # catch-all 200 for missing paths, so its -fs filter must be set to a measured
 # baseline first (see README Troubleshooting) before it produces anything useful.
+# Once it is: -of is set to `all`, so a real run writes
+# ffuf-results.{json,ejson,html,md,csv,ecsv} in one pass.
 ```
 
 Only `target-host.example.com` and `staging-target-host.example.com` are authorized DAST targets
 (the two hosts the original assessment covered) — never point these at other hosts.
+
+## Claude Code Skills
+
+This repo ships 5 manual-invocation-only skills at `.claude/skills/`, each wrapping
+the commands above: `/sast`, `/sca`, `/sbom`, `/dast`, `/secrets`. Every skill takes
+an optional `target=<name-or-path>` override (falls back to `.env`'s
+`TARGET_REPO`/`TARGET_NAME`, or `TARGET_HOST` for `/dast`), and where a category
+wraps more than one tool, space-separated tool/variant tokens select which ones run
+(e.g. `/sca trivy grype`, `/dast api full`) — see each skill's own `SKILL.md` for
+its exact `argument-hint` and examples. None auto-trigger from plain conversation
+(`disable-model-invocation: true` on all 5) — they only run when explicitly typed.
+
+**These only resolve when the session's current directory is `security-tools`
+itself (or a subdirectory).** Claude Code scopes directory-local skills to the
+directory they live in — invoking `/dast` (etc.) while working in a sibling folder
+(`../projects/...`, `../2026-07-15/`) fails with "unknown command"; `cd` into
+`security-tools` first. Because of this precondition, every skill's own commands
+are plain relative `docker compose run --rm <service>` — no `cd`, no absolute path
+needed inside the skill itself, since cwd is already guaranteed correct by the time
+it runs.
 
 ## Architecture
 
@@ -129,6 +153,10 @@ Only `target-host.example.com` and `staging-target-host.example.com` are authori
     Excluding it previously dropped detected dependencies from ~200+ to 34.
 - **`output/`** is gitignored and organized as `sast|sca/<TARGET_NAME>/` or
   `dast/<TARGET_HOST>/` — every service's volume mounts route its report there.
+- **`.claude/skills/`** holds the 5 Claude Code skill wrappers (see "Claude Code
+  Skills" above). They don't add any scan logic of their own — just argument
+  parsing (`target=`, tool/variant tokens) and step sequencing around the exact
+  same `docker compose run --rm <service>` commands documented above.
 
 ## Known operational gotchas
 
@@ -157,3 +185,15 @@ Only `target-host.example.com` and `staging-target-host.example.com` are authori
 - Semgrep's current config (`p/security-audit`+`p/owasp-top-ten`+`p/java`+`p/docker`,
   216 rules) already exceeds what the original assessment ran (`auto`+`p/security-audit`)
   — no change needed there to match or exceed that run's coverage.
+- `trivy-fs`/`trivy-config` fail if their generated JSON/HTML report files already
+  exist from a prior run and haven't been cleared — `trivy convert` (the HTML step)
+  in particular refuses to overwrite silently; if a run errors on this, move or
+  delete the stale `output/sca/<TARGET_NAME>/trivy-*-report.*` files first.
+- `testssl` and `grype` both refuse to overwrite an existing report file of the same
+  name (`Fatal error: non-empty "..." exists`) — move the prior run's file aside
+  (or delete it) before re-running against the same `TARGET_HOST`/`TARGET_NAME`.
+- **A `/sast`, `/sca`, `/sbom`, `/dast`, or `/secrets` skill invocation fails with
+  "unknown command"** unless the session's current directory is `security-tools`
+  (or a subdirectory) at the moment it's typed — see "Claude Code Skills" above.
+  This isn't a bug in the skill files; it's how Claude Code scopes directory-local
+  skills. `cd` into `security-tools` and retry.

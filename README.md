@@ -71,7 +71,14 @@ the original report's taint-tracking finding.
 docker compose run --rm trivy-fs
 docker compose run --rm trivy-config
 ```
-Output: `output/sca/<TARGET_NAME>/trivy-fs-report.json` and `trivy-config-report.json`
+Output: `output/sca/<TARGET_NAME>/{trivy-fs,trivy-config}-report.{json,html}`
+
+The `.html` report is produced by a second `trivy convert` step (against the
+`html.tpl` template bundled in the image at `/contrib/html.tpl`) chained onto the
+same command — Trivy's own `--format` flag only accepts one value per invocation,
+so JSON (primary) and HTML (human-readable) each need their own pass. If a prior
+run's report files are still present, `trivy convert` refuses to overwrite them —
+move or delete `output/sca/<TARGET_NAME>/trivy-*-report.*` first.
 
 ### SCA — OWASP Dependency-Check
 ```powershell
@@ -144,12 +151,16 @@ docker compose run --rm testssl
 `zap-api` targets `TARGET_API_SPEC_URL` (an OpenAPI/Swagger JSON/YAML URL), not
 `TARGET_HOST` directly — defaults to `https://target-host.example.com/v3/api-docs`
 (a springdoc-based Spring Boot app's default path); set it explicitly alongside
-`TARGET_HOST` in `.env` if it doesn't match. All three write `.html`, `.json`, and
-`.md` reports.
+`TARGET_HOST` in `.env` if it doesn't match. All three ZAP services write `.html`,
+`.json`, and `.md` reports. `testssl` writes both `--jsonfile` and `--htmlfile`.
 
 Output under `output/dast/<TARGET_HOST>/`. Only run these against hosts you're
 authorized to test — `target-host.example.com` / `staging-target-host.example.com` are the two
 hosts the original assessment covered.
+
+If `testssl` errors with a report file already existing, move or delete the prior
+`output/dast/<TARGET_HOST>/testssl_<TARGET_HOST>.{json,html}` files first — it
+refuses to silently overwrite (`--append`/`--overwrite` exist but aren't set here).
 
 ### DAST — Authenticated full scan (`zap-auth/`)
 
@@ -208,7 +219,21 @@ size/response filter. Before ever running it: fetch one deliberately-nonexistent
 against `TARGET_HOST`, note the response's byte size, and edit the `ffuf` service's
 `-fs` value in `docker-compose.yml` to match (or use `-fc`/`-fw` instead). It also
 needs a wordlist you provide yourself under `./wordlists/` (gitignored, not bundled —
-e.g. SecLists' `raft-medium-directories.txt`).
+e.g. SecLists' `raft-medium-directories.txt`). Once calibrated and run, its `-of all`
+setting writes every supported format in one pass: `ffuf-results.{json,ejson,html,md,csv,ecsv}`.
+
+## Claude Code Skills
+
+If you're using Claude Code, this repo also ships 5 manual-invocation skills at
+`.claude/skills/` that wrap all of the above: `/sast`, `/sca`, `/sbom`, `/dast`,
+`/secrets`. Each takes an optional `target=<name-or-path>` override and, where a
+category wraps more than one tool, space-separated tool/variant tokens (e.g.
+`/sca trivy grype`, `/dast api full`) — see each skill's own file for exact syntax.
+
+They only work when your current directory is `security-tools` itself (or a
+subdirectory) — that's how Claude Code scopes directory-local skills. Typing
+`/dast` while working in a sibling folder fails with "unknown command"; `cd` into
+`security-tools` first.
 
 ## Keeping the Dependency-Check database warm
 
@@ -271,8 +296,11 @@ before copying. Must use the **same image tag** (`13.0.0`) on both ends.
 ```
 security-tools/
 ├── docker-compose.yml
+├── .claude/
+│   └── skills/            # /sast /sca /sbom /dast /secrets -- see "Claude Code Skills" above
 ├── docker/
 │   └── recon-tools.Dockerfile  # local builds for gau/waybackurls/ffuf
+├── zap-auth/               # authenticated ZAP Automation Framework plan (see below)
 ├── .env                  # your local config, gitignored
 ├── .env.example
 ├── dependency-check-data/ # persistent NVD database (gitignored, ~600MB+)
@@ -281,8 +309,9 @@ security-tools/
 ├── wordlists/             # your own wordlists for ffuf (gitignored, not bundled)
 └── output/
     ├── sast/<service>/
-    ├── sca/<service>/
+    ├── sca/<service>/     # dependency-check, trivy-fs/-config, grype
     ├── sbom/<service>/    # sbom.cdx.json/sbom.spdx.json (syft), cdxgen-sbom.cdx.json
+    ├── secret/<service>/  # gitleaks-report.sarif, trufflehog-verified.jsonl
     └── dast/<host>/       # zap/nuclei/testssl + httpx/katana/gau/waybackurls/ffuf
 ```
 
